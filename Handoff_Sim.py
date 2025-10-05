@@ -1,103 +1,173 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# --- 1. Initialization ---
-# Base Station (BS) positions
-bs_a_pos = np.array([0, 0])
-bs_b_pos = np.array([2000, 0]) # 2000 meters apart on the x-axis
+# --- Part 1: Functions to Get User Input ---
 
-# User mobility parameters
-start_pos = np.array([-500, 200])
-end_pos = np.array([2500, 200])
-user_velocity = 15  # meters per second (e.g., a car)
-sim_time = (np.linalg.norm(end_pos - start_pos) / user_velocity) # Total time to traverse the path
-time_step = 0.5 # seconds
+def get_coordinate(prompt_name):
+    """Safely gets a 2D coordinate (x, y) from the user."""
+    while True:
+        try:
+            x = float(input(f"Enter {prompt_name} x-coordinate (meters): "))
+            y = float(input(f"Enter {prompt_name} y-coordinate (meters): "))
+            return np.array([x, y])
+        except ValueError:
+            print("Invalid input. Please enter numeric values for coordinates.")
 
-# Signal propagation parameters
-p_tx_dbm = 40.0  # Transmit power in dBm
-path_loss_n = 2.8 # Path loss exponent for an urban environment
-ref_distance = 1.0 # Reference distance in meters
+def get_float_value(prompt, example):
+    """Safely gets a single float value from the user."""
+    while True:
+        try:
+            value = float(input(f"{prompt} (e.g., {example}): "))
+            return value
+        except ValueError:
+            print("Invalid input. Please enter a numeric value.")
 
-# Handoff parameters
-hysteresis_margin_db = 3.0
+def get_user_parameters():
+    """Collects all simulation parameters from the user."""
+    print("--- Please provide simulation parameters ---")
+    
+    print("\n--- Base Station (BS) Setup ---")
+    bs_a_pos = get_coordinate("BS-A Position")
+    bs_b_pos = get_coordinate("BS-B Position")
+    
+    print("\n--- User Mobility Setup ---")
+    start_pos = get_coordinate("User Start Position")
+    end_pos = get_coordinate("User End Position")
+    user_velocity = get_float_value("Enter user velocity in meters/second", 15)
+    
+    print("\n--- Signal Propagation Setup ---")
+    p_tx_dbm = get_float_value("Enter transmit power in dBm", 40.0)
+    path_loss_n = get_float_value("Enter path loss exponent", 2.8)
+    
+    print("\n--- Handoff Logic Setup ---")
+    hysteresis_margin_db = get_float_value("Enter hysteresis margin in dB", 3.0)
+    
+    print("\n--- Simulation Control ---")
+    time_step = get_float_value("Enter simulation time step in seconds", 0.5)
 
-# --- Helper function for RSS calculation ---
+    params = {
+        'bs_a_pos': bs_a_pos,
+        'bs_b_pos': bs_b_pos,
+        'start_pos': start_pos,
+        'end_pos': end_pos,
+        'user_velocity': user_velocity,
+        'p_tx_dbm': p_tx_dbm,
+        'path_loss_n': path_loss_n,
+        'hysteresis_margin_db': hysteresis_margin_db,
+        'time_step': time_step,
+        'ref_distance': 1.0 # Reference distance in meters, kept constant
+    }
+    print("\n--- All parameters received. Starting simulation... ---")
+    return params
+
+# --- Part 2: Core Simulation Logic ---
+
 def calculate_rss(distance, p_tx, n, d0):
+    """Calculates RSS using the Log-Distance Path Loss Model."""
     if distance < d0:
         distance = d0
-    # Log-distance path loss model in dB
     path_loss = 10 * n * np.log10(distance / d0)
     rss = p_tx - path_loss
     return rss
 
-# --- 2. Simulation Setup ---
-time_points = np.arange(0, sim_time, time_step)
-user_positions = [start_pos + t * user_velocity * (end_pos - start_pos) / np.linalg.norm(end_pos - start_pos) for t in time_points]
+def run_simulation(params):
+    """Executes the handoff simulation using the provided parameters."""
+    # Unpack parameters
+    bs_a_pos = params['bs_a_pos']
+    bs_b_pos = params['bs_b_pos']
+    start_pos = params['start_pos']
+    end_pos = params['end_pos']
+    user_velocity = params['user_velocity']
+    time_step = params['time_step']
 
-# Data logging
-rss_a_log = []
-rss_b_log = []
-serving_cell_log = []
-handoff_points = []
+    # Calculate simulation time and user positions
+    path_vector = end_pos - start_pos
+    path_length = np.linalg.norm(path_vector)
+    if path_length == 0 or user_velocity == 0:
+        print("Error: User path length or velocity is zero. Cannot simulate.")
+        return None
+        
+    sim_time = path_length / user_velocity
+    time_points = np.arange(0, sim_time, time_step)
+    user_positions = [start_pos + t * user_velocity * path_vector / path_length for t in time_points]
 
-# Initial connection
-serving_cell = 'A' if np.linalg.norm(user_positions[0] - bs_a_pos) < np.linalg.norm(user_positions[0] - bs_b_pos) else 'B'
+    # Data logging setup
+    logs = {'rss_a': [], 'rss_b': [], 'serving_cell': [], 'handoffs': []}
+    
+    # Determine initial connection
+    initial_dist_a = np.linalg.norm(user_positions[0] - bs_a_pos)
+    initial_dist_b = np.linalg.norm(user_positions[0] - bs_b_pos)
+    serving_cell = 'A' if initial_dist_a < initial_dist_b else 'B'
 
+    # Simulation loop
+    for pos in user_positions:
+        dist_a = np.linalg.norm(pos - bs_a_pos)
+        dist_b = np.linalg.norm(pos - bs_b_pos)
 
-# --- 3. Simulation Loop ---
-for pos in user_positions:
-    # a. Calculate distances
-    dist_a = np.linalg.norm(pos - bs_a_pos)
-    dist_b = np.linalg.norm(pos - bs_b_pos)
+        rss_a = calculate_rss(dist_a, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
+        rss_b = calculate_rss(dist_b, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
 
-    # b. Calculate RSS
-    rss_a = calculate_rss(dist_a, p_tx_dbm, path_loss_n, ref_distance)
-    rss_b = calculate_rss(dist_b, p_tx_dbm, path_loss_n, ref_distance)
+        # Handoff logic
+        if serving_cell == 'A':
+            if rss_b > rss_a + params['hysteresis_margin_db']:
+                serving_cell = 'B'
+                logs['handoffs'].append({'pos': pos[0], 'rss': rss_b})
+                print(f"Handoff A -> B at position x={pos[0]:.2f} m")
+        elif serving_cell == 'B':
+            if rss_a > rss_b + params['hysteresis_margin_db']:
+                serving_cell = 'A'
+                logs['handoffs'].append({'pos': pos[0], 'rss': rss_a})
+                print(f"Handoff B -> A at position x={pos[0]:.2f} m")
 
-    # c. Apply Handoff Logic
-    if serving_cell == 'A':
-        if rss_b > rss_a + hysteresis_margin_db:
-            serving_cell = 'B'
-            handoff_points.append({'pos': pos[0], 'rss': rss_b})
-            print(f"Handoff A -> B at position x={pos[0]:.2f} m")
-    elif serving_cell == 'B':
-        if rss_a > rss_b + hysteresis_margin_db:
-            serving_cell = 'A'
-            handoff_points.append({'pos': pos[0], 'rss': rss_a})
-            print(f"Handoff B -> A at position x={pos[0]:.2f} m")
+        # Log data for this time step
+        logs['rss_a'].append(rss_a)
+        logs['rss_b'].append(rss_b)
+        logs['serving_cell'].append(1 if serving_cell == 'A' else 2)
 
-    # d. Log data
-    rss_a_log.append(rss_a)
-    rss_b_log.append(rss_b)
-    serving_cell_log.append(1 if serving_cell == 'A' else 2) # Use numbers for plotting
+    return user_positions, logs
 
-# --- 4. Visualization ---
-user_x_positions = [p[0] for p in user_positions]
+# --- Part 3: Visualization ---
 
-plt.style.use('seaborn-v0_8-whitegrid')
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+def plot_results(user_positions, logs):
+    """Plots the simulation results."""
+    if user_positions is None or logs is None:
+        return
+        
+    user_x_positions = [p[0] for p in user_positions]
 
-# Plot RSS values
-ax1.plot(user_x_positions, rss_a_log, label='RSS from Cell A', color='blue')
-ax1.plot(user_x_positions, rss_b_log, label='RSS from Cell B', color='red')
-ax1.set_ylabel('Received Signal Strength (dBm) 📶')
-ax1.set_title('Handoff Simulation based on RSS with Hysteresis')
-ax1.legend()
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
 
-# Mark the handoff point
-for ho in handoff_points:
-    ax1.axvline(x=ho['pos'], color='green', linestyle='--', label=f'Handoff Event at x={ho["pos"]:.0f}m')
-    ax1.plot(ho['pos'], ho['rss'], 'go', markersize=10)
-ax1.legend()
+    # Plot RSS values
+    ax1.plot(user_x_positions, logs['rss_a'], label='RSS from Cell A', color='blue')
+    ax1.plot(user_x_positions, logs['rss_b'], label='RSS from Cell B', color='red')
+    ax1.set_ylabel('Received Signal Strength (dBm) 📶')
+    ax1.set_title('Handoff Simulation based on RSS with Hysteresis')
+    
+    # Mark the handoff points
+    for ho in logs['handoffs']:
+        ax1.axvline(x=ho['pos'], color='green', linestyle='--')
+        ax1.plot(ho['pos'], ho['rss'], 'go', markersize=10, label=f'Handoff Event at x={ho["pos"]:.0f}m')
+    ax1.legend()
+    
+    # Plot Serving Cell
+    ax2.plot(user_x_positions, logs['serving_cell'], 'k.-', drawstyle='steps-post')
+    ax2.set_xlabel('User Position along X-axis (meters)')
+    ax2.set_ylabel('Serving Cell')
+    ax2.set_yticks([1, 2])
+    ax2.set_yticklabels(['Cell A', 'Cell B'])
+    ax2.set_ylim(0.5, 2.5)
 
+    plt.tight_layout()
+    plt.show()
 
-# Plot Serving Cell
-ax2.plot(user_x_positions, serving_cell_log, 'k.-', drawstyle='steps-post')
-ax2.set_xlabel('User Position along X-axis (meters)')
-ax2.set_ylabel('Serving Cell')
-ax2.set_yticks([1, 2])
-ax2.set_yticklabels(['Cell A', 'Cell B'])
-ax2.set_ylim(0.5, 2.5)
-
-plt.tight_layout()
-plt.show()
+# --- Main Execution ---
+if __name__ == "__main__":
+    # 1. Get parameters from the user
+    simulation_params = get_user_parameters()
+    
+    # 2. Run the simulation
+    positions, results_logs = run_simulation(simulation_params)
+    
+    # 3. Plot the results
+    plot_results(positions, results_logs)
