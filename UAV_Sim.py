@@ -29,26 +29,53 @@ CONFIG = {
         'velocity': 5       # m/s
     },
 
-    # Radio & Handoff
+    # Radio & Handoff Parameters
     'radio': {
-        'tx_power': 30,     # dBm
-        'path_loss_n': 2.5, # Environment exponent
-        'hysteresis': 3.0   # dB
+        'tx_power': 30,         # dBm
+        'path_loss_n': 2.5,     # Path loss exponent
+        'hysteresis': 5.0,      # dB Margin
+        'ref_distance': 1.0,    # d0
+        'frequency_hz': 2.4e9,  # Carrier Frequency (2.4 GHz)
+        'shadowing_std_db': 0.1 # Shadow Factor (SF) - Standard Deviation in dB
     },
 
     # Simulation Settings
-    'time_step': 0.5        # seconds (Lower = higher resolution)
+    'time_step': 0.5        # seconds
 }
 
 # ==========================================
 # 2. PHYSICS & RADIO FUNCTIONS
 # ==========================================
 
-def get_rss(pos1, pos2, tx_power, n, d0=1.0):
-    """Calculates RSS based on 3D distance and Log-Distance Path Loss."""
+def get_rss(pos1, pos2, tx_power, n, d0, frequency, shadow_std):
+    """
+    Calculates RSS using the Log-Normal Shadowing Model for 3D distances.
+    Formula: PL = PL_ref + 10*n*log10(d/d0) + SF*epsilon
+    """
+    # 3D Euclidean Distance
     dist = np.linalg.norm(pos1 - pos2)
     dist = max(dist, d0) # Avoid log(0)
-    return tx_power - 10 * n * np.log10(dist / d0)
+
+    # 1. Calculate Wavelength (lambda = c / f)
+    c = 3e8 
+    wavelength = c / frequency
+
+    # 2. Calculate Reference Path Loss (PL_ref) at d0
+    # Formula: 20 * log10(4 * pi * d0 / lambda)
+    pl_ref = 20 * np.log10((4 * np.pi * d0) / wavelength)
+
+    # 3. Calculate Distance Component
+    # Formula: 10 * n * log10(d / d0)
+    dist_loss = 10 * n * np.log10(dist / d0)
+
+    # 4. Calculate Shadowing Component
+    # Formula: SF * epsilon (random normal distribution)
+    shadowing = np.random.normal(0, shadow_std)
+
+    # Total Path Loss
+    path_loss = pl_ref + dist_loss + shadowing
+    
+    return tx_power - path_loss
 
 def random_direction():
     """Returns a random 2D unit vector (x, y, 0)."""
@@ -68,7 +95,6 @@ def update_uav_position(pos, direction, anchor, radius, speed, dt):
     
     if dist_from_anchor > radius:
         # Hit boundary: Stay put this step, pick new random direction inwards
-        # (Simple bounce logic)
         to_center = anchor - pos[:2]
         to_center = to_center / np.linalg.norm(to_center) # Normalize
         
@@ -78,7 +104,7 @@ def update_uav_position(pos, direction, anchor, radius, speed, dt):
         
         return pos, np.array([new_dir_2d[0], new_dir_2d[1], 0])
     
-    # Randomly change direction occasionally (Brownian-like motion)
+    # Randomly change direction occasionally
     if np.random.rand() < 0.05:
         return next_pos, random_direction()
         
@@ -115,10 +141,16 @@ def run_simulation(cfg):
         'ua_path': [], 'ub_path': []
     }
 
-    # Initial Connection
-    d_a = np.linalg.norm(user_path[0] - ua_pos)
-    d_b = np.linalg.norm(user_path[0] - ub_pos)
-    serving = 'A' if d_a < d_b else 'B'
+    # Radio params extraction for cleaner code
+    r_conf = cfg['radio']
+    
+    # Initial Connection (Use 0 shadowing for stability at t=0)
+    rss_a_init = get_rss(user_path[0], ua_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
+                         r_conf['ref_distance'], r_conf['frequency_hz'], 0)
+    rss_b_init = get_rss(user_path[0], ub_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
+                         r_conf['ref_distance'], r_conf['frequency_hz'], 0)
+    
+    serving = 'A' if rss_a_init > rss_b_init else 'B'
 
     # Time Stepping Loop
     for u_pos in user_path:
@@ -135,12 +167,14 @@ def run_simulation(cfg):
         logs['ua_path'].append(ua_pos.copy())
         logs['ub_path'].append(ub_pos.copy())
 
-        # 2. Calculate Signals
-        rss_a = get_rss(u_pos, ua_pos, cfg['radio']['tx_power'], cfg['radio']['path_loss_n'])
-        rss_b = get_rss(u_pos, ub_pos, cfg['radio']['tx_power'], cfg['radio']['path_loss_n'])
+        # 2. Calculate Signals (Now with Shadowing)
+        rss_a = get_rss(u_pos, ua_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
+                        r_conf['ref_distance'], r_conf['frequency_hz'], r_conf['shadowing_std_db'])
+        rss_b = get_rss(u_pos, ub_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
+                        r_conf['ref_distance'], r_conf['frequency_hz'], r_conf['shadowing_std_db'])
         
         # 3. Handoff Decision
-        hyst = cfg['radio']['hysteresis']
+        hyst = r_conf['hysteresis']
         
         if serving == 'A' and rss_b > rss_a + hyst:
             serving = 'B'
@@ -170,16 +204,16 @@ def plot_time_series(user_path, logs, cfg):
     
     # Plot 1: RSS Levels
     ax = axes[0]
-    ax.plot(x_axis, logs['rss_a'], 'b-', label='RSS UAV-A', alpha=0.8)
-    ax.plot(x_axis, logs['rss_b'], 'r-', label='RSS UAV-B', alpha=0.8)
+    ax.plot(x_axis, logs['rss_a'], 'b-', label='RSS UAV-A', alpha=0.6, lw=1)
+    ax.plot(x_axis, logs['rss_b'], 'r-', label='RSS UAV-B', alpha=0.6, lw=1)
     ax.set_ylabel('RSS (dBm)')
-    ax.set_title('Signal Strength & Handoff Analysis')
+    ax.set_title('Signal Strength with Shadowing (UAV Network)')
     ax.grid(True, alpha=0.3)
     ax.legend(loc='upper right')
 
     # Plot 2: RSS Difference
     ax = axes[1]
-    ax.plot(x_axis, logs['rss_diff'], 'k-', label='RSS_B - RSS_A', lw=1)
+    ax.plot(x_axis, logs['rss_diff'], 'k-', label='RSS_B - RSS_A', lw=1, alpha=0.8)
     ax.axhline(hyst, color='red', ls=':', label=f'Hyst (+{hyst}dB)')
     ax.axhline(-hyst, color='blue', ls=':', label=f'Hyst (-{hyst}dB)')
     ax.fill_between(x_axis, -hyst, hyst, color='gray', alpha=0.1)
@@ -196,13 +230,16 @@ def plot_time_series(user_path, logs, cfg):
     ax.set_xlabel('User X Position (m)')
     ax.grid(True, alpha=0.3)
 
-    # Annotate Handoffs on all plots
+    # Annotate Handoffs (First one only in legend to avoid clutter)
     for i, ax in enumerate(axes):
+        first_ho = True
         for pos, _ in logs['handoffs']:
-            ax.axvline(pos[0], color='green', ls='--', alpha=0.6)
-            if i == 0: # Only label on top plot to avoid clutter
-                ax.text(pos[0], ax.get_ylim()[0], 'HO', color='green', 
-                        ha='center', va='bottom', fontweight='bold')
+            label = 'Handoff' if (first_ho and i==0) else None
+            ax.axvline(pos[0], color='green', ls='--', alpha=0.6, label=label)
+            first_ho = False
+    
+    if len(logs['handoffs']) > 0:
+        axes[0].legend()
 
     plt.tight_layout()
     plt.show()
@@ -227,7 +264,6 @@ def plot_spatial_map(user_path, logs, cfg):
     plt.plot(ub_path[:, 0], ub_path[:, 1], 'r:', alpha=0.5, lw=1, label='UAV-B Path')
 
     # 3. Plot User Path (Color coded by serving cell)
-    # We scatter plot the points to easily color-code segments
     serving_arr = np.array(logs['serving'])
     
     # Points served by A
@@ -247,12 +283,16 @@ def plot_spatial_map(user_path, logs, cfg):
                     c='lime', edgecolors='black', s=100, zorder=10, label='Handoff Event')
 
     # Formatting
-    plt.title('Spatial Map: UAV Handoff Simulation')
+    plt.title('Spatial Map: UAV Handoff with Shadowing')
     plt.xlabel('X Coordinate (m)')
     plt.ylabel('Y Coordinate (m)')
-    plt.axis('equal') # CRITICAL for map views
+    plt.axis('equal')
     plt.grid(True, ls='--', alpha=0.5)
-    plt.legend(loc='best')
+    
+    # Fix duplicate labels
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(), loc='best')
     
     plt.tight_layout()
     plt.show()
@@ -261,7 +301,7 @@ def plot_spatial_map(user_path, logs, cfg):
 # 5. MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    print("Initializing UAV Handoff Simulation...")
+    print("Initializing UAV Handoff Simulation (with Shadowing)...")
     
     # Run
     path_data, log_data = run_simulation(CONFIG)

@@ -22,6 +22,10 @@ def get_simulation_config():
         'p_tx_dbm': 40.0,      # Transmit power
         'path_loss_n': 2.8,    # Path loss exponent (2.0=free space, 4.0=urban)
         'ref_distance': 1.0,
+        
+        # New Parameters for Image Formula
+        'frequency_hz': 2.4e9,     # Carrier Frequency (2.4 GHz)
+        'shadowing_std_db': 0.1,   # Shadow Factor (SF) - Standard Deviation in dB
 
         # Handoff Logic
         'hysteresis_margin_db': 5.0, # dB margin required to switch
@@ -32,10 +36,33 @@ def get_simulation_config():
 
 # --- Part 2: Simulation Logic ---
 
-def calculate_rss(distance, p_tx, n, d0):
+def calculate_rss(distance, p_tx, n, d0, frequency, shadow_std):
+    """
+    Calculates RSS using the Log-Normal Shadowing Model.
+    Formula: PL = PL_ref + 10*n*log10(d/d0) + SF*epsilon
+    """
     if distance < d0:
         distance = d0
-    path_loss = 10 * n * np.log10(distance / d0)
+        
+    # 1. Calculate Wavelength (lambda = c / f)
+    c = 3e8 # Speed of light in m/s
+    wavelength = c / frequency
+    
+    # 2. Calculate Reference Path Loss (PL_ref) at d0
+    # PL_ref = 20 * log10(4 * pi * d0 / lambda)
+    pl_ref = 20 * np.log10((4 * np.pi * d0) / wavelength)
+    
+    # 3. Calculate Distance Component
+    dist_loss = 10 * n * np.log10(distance / d0)
+    
+    # 4. Calculate Shadowing Component (SF * epsilon)
+    # epsilon is random normal (Gaussian), scaled by shadow factor (std dev)
+    shadowing = np.random.normal(0, shadow_std)
+    
+    # Total Path Loss
+    path_loss = pl_ref + dist_loss + shadowing
+    
+    # Received Power
     rss = p_tx - path_loss
     return rss
 
@@ -69,16 +96,27 @@ def run_simulation(params):
     }
     
     # Determine initial connection
+    # Note: We use 0 shadowing for initialization to avoid random start glitches
     initial_dist_a = np.linalg.norm(user_positions[0] - bs_a_pos)
     initial_dist_b = np.linalg.norm(user_positions[0] - bs_b_pos)
-    serving_cell = 'A' if initial_dist_a < initial_dist_b else 'B'
+    
+    # Helper to get clean RSS for init
+    rss_a_init = calculate_rss(initial_dist_a, params['p_tx_dbm'], params['path_loss_n'], 
+                               params['ref_distance'], params['frequency_hz'], 0)
+    rss_b_init = calculate_rss(initial_dist_b, params['p_tx_dbm'], params['path_loss_n'], 
+                               params['ref_distance'], params['frequency_hz'], 0)
+                               
+    serving_cell = 'A' if rss_a_init > rss_b_init else 'B'
 
     for pos in user_positions:
         dist_a = np.linalg.norm(pos - bs_a_pos)
         dist_b = np.linalg.norm(pos - bs_b_pos)
 
-        rss_a = calculate_rss(dist_a, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
-        rss_b = calculate_rss(dist_b, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
+        # Calculate RSS with Shadowing
+        rss_a = calculate_rss(dist_a, params['p_tx_dbm'], params['path_loss_n'], 
+                              params['ref_distance'], params['frequency_hz'], params['shadowing_std_db'])
+        rss_b = calculate_rss(dist_b, params['p_tx_dbm'], params['path_loss_n'], 
+                              params['ref_distance'], params['frequency_hz'], params['shadowing_std_db'])
 
         # Handoff Logic
         if serving_cell == 'A':
@@ -113,16 +151,16 @@ def plot_dashboard(user_positions, logs, params):
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
 
-    # Plot 1: Raw RSS Levels
-    ax1.plot(user_x_positions, logs['rss_a'], label='RSS Cell A', color='blue')
-    ax1.plot(user_x_positions, logs['rss_b'], label='RSS Cell B', color='red')
+    # Plot 1: Raw RSS Levels (Now Noisier due to Shadowing)
+    ax1.plot(user_x_positions, logs['rss_a'], label='RSS Cell A', color='blue', alpha=0.7, linewidth=1)
+    ax1.plot(user_x_positions, logs['rss_b'], label='RSS Cell B', color='red', alpha=0.7, linewidth=1)
     ax1.set_ylabel('RSS (dBm)')
-    ax1.set_title('1. Received Signal Strength')
+    ax1.set_title('1. Received Signal Strength (with Log-Normal Shadowing)')
     ax1.legend()
     ax1.grid(True, which='both', linestyle='--', alpha=0.5)
 
     # Plot 2: Handoff Decision Metric (RSS Difference)
-    ax2.plot(user_x_positions, logs['rss_diff'], color='purple', label='RSS_B - RSS_A')
+    ax2.plot(user_x_positions, logs['rss_diff'], color='purple', label='RSS_B - RSS_A', alpha=0.8)
     # Add Threshold Lines
     ax2.axhline(y=hyst, color='red', linestyle=':', label=f'Handoff Thresh (A->B): +{hyst}dB')
     ax2.axhline(y=-hyst, color='blue', linestyle=':', label=f'Handoff Thresh (B->A): -{hyst}dB')
@@ -146,8 +184,9 @@ def plot_dashboard(user_positions, logs, params):
     ax3.set_title('3. Active Connection Status')
     
     # Mark handoffs on serving cell plot
-    for ho in logs['handoffs']:
-        ax3.axvline(x=ho['pos'][0], color='green', linestyle='--', label='Handoff Event' if ho == logs['handoffs'][0] else "")
+    # FIXED: Use enumerate to avoid ambiguous truth value error when comparing numpy arrays
+    for i, ho in enumerate(logs['handoffs']):
+        ax3.axvline(x=ho['pos'][0], color='green', linestyle='--', label='Handoff Event' if i == 0 else "")
     
     ax3.legend()
     plt.tight_layout()
@@ -185,12 +224,16 @@ def plot_spatial_map(user_positions, logs, params):
     for ho in logs['handoffs']:
         plt.scatter(ho['pos'][0], ho['pos'][1], color='lime', s=150, edgecolors='black', label='Handoff Location', zorder=10)
 
+    # Avoid duplicate labels in legend
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+
     plt.title('Spatial Map: User Path & Network Coverage')
     plt.xlabel('X Coordinate (m)')
     plt.ylabel('Y Coordinate (m)')
     plt.axis('equal') # Ensures map isn't distorted
     plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
     plt.show()
 
 # --- Main Execution ---
