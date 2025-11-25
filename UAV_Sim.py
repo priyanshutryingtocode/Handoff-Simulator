@@ -1,299 +1,274 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle 
+from matplotlib.patches import Circle
 
-# --- Part 1: Helper & Utility Functions ---
-
-def getCoordinate(prompt):
-    while True:
-        try:
-            x = float(input(f"Enter {prompt} x-coordinate (meters): "))
-            y = float(input(f"Enter {prompt} y-coordinate (meters): "))
-            return np.array([x, y])
-        except ValueError:
-            print("Invalid input. Please enter numeric values.")
-
-def getFloat(prompt):
-    while True:
-        try:
-            value = float(input(f"{prompt}"))
-            return value
-        except ValueError:
-            print("Invalid input. Please enter a numeric value.")
-
-def calculate_3d_distance(pos1, pos2):
-    return np.linalg.norm(pos1 - pos2)
-
-def get_random_2d_direction():
-    angle = np.random.uniform(0, 2 * np.pi)
-    return np.array([np.cos(angle), np.sin(angle), 0])
-
-def RSS(distance_3d, p_tx, n, d0):
+# ==========================================
+# 1. CONFIGURATION BLOCK
+# ==========================================
+CONFIG = {
+    # UAV-A (Base Station A)
+    'uav_a': {
+        'anchor': np.array([0, 0]),
+        'radius': 200,      # meters
+        'altitude': 120,    # meters
+        'speed': 15         # m/s
+    },
     
-    if distance_3d < d0:
-        distance_3d = d0
-        
-    path_loss = 10 * n * np.log10(distance_3d / d0)
-    rss = p_tx - path_loss 
-    return rss
+    # UAV-B (Base Station B)
+    'uav_b': {
+        'anchor': np.array([500, 0]),
+        'radius': 200,      # meters
+        'altitude': 120,    # meters
+        'speed': 15         # m/s
+    },
 
-def update_uav_position(current_pos, current_dir, params, uav_prefix):
+    # User Mobility
+    'user': {
+        'start': np.array([0, -300, 0]),
+        'end':   np.array([500, 300, 0]),
+        'velocity': 5       # m/s
+    },
 
-    speed = params[f'{uav_prefix}_speed']
-    anchor = params[f'{uav_prefix}_anchor']
-    radius = params[f'{uav_prefix}_radius']
+    # Radio & Handoff
+    'radio': {
+        'tx_power': 30,     # dBm
+        'path_loss_n': 2.5, # Environment exponent
+        'hysteresis': 3.0   # dB
+    },
+
+    # Simulation Settings
+    'time_step': 0.5        # seconds (Lower = higher resolution)
+}
+
+# ==========================================
+# 2. PHYSICS & RADIO FUNCTIONS
+# ==========================================
+
+def get_rss(pos1, pos2, tx_power, n, d0=1.0):
+    """Calculates RSS based on 3D distance and Log-Distance Path Loss."""
+    dist = np.linalg.norm(pos1 - pos2)
+    dist = max(dist, d0) # Avoid log(0)
+    return tx_power - 10 * n * np.log10(dist / d0)
+
+def random_direction():
+    """Returns a random 2D unit vector (x, y, 0)."""
+    theta = np.random.uniform(0, 2 * np.pi)
+    return np.array([np.cos(theta), np.sin(theta), 0])
+
+def update_uav_position(pos, direction, anchor, radius, speed, dt):
+    """
+    Updates UAV position. Bounces off the patrol radius boundary.
+    Returns: (new_position, new_direction)
+    """
+    # Propose new position
+    next_pos = pos + direction * speed * dt
     
-    velocity_vector = current_dir * speed
-    next_pos = current_pos + velocity_vector * params['time_step']
-
-    next_pos_2d = np.array([next_pos[0], next_pos[1]])
-    dist_from_anchor = np.linalg.norm(next_pos_2d - anchor)
+    # Check 2D distance from anchor (ignore altitude for boundary check)
+    dist_from_anchor = np.linalg.norm(next_pos[:2] - anchor)
     
     if dist_from_anchor > radius:
-        new_dir = get_random_2d_direction()
-        return current_pos, new_dir
-    else:
-        if np.random.rand() < 0.05: # 5% chance to change direction
-            new_dir = get_random_2d_direction()
-            return next_pos, new_dir
-        else:
-            return next_pos, current_dir
-
-# --- Part 2: Get Simulation Parameters ---
-
-def getParameters():
-    
-    print("\nEnter simulation parameters")
-    
-    print("\n--- UAV-A (BS) Setup 🛰️ ---")
-    uav_a_anchor = getCoordinate("UAV-A Anchor Position")
-    uav_a_radius = getFloat("Enter UAV-A patrol radius (meters): ")
-    uav_a_alt = getFloat("Enter UAV-A altitude (meters): ")
-    uav_a_speed = getFloat("Enter UAV-A speed (m/s): ")
-
-    print("\n--- UAV-B (BS) Setup 🛰️ ---")
-    uav_b_anchor = getCoordinate("UAV-B Anchor Position")
-    uav_b_radius = getFloat("Enter UAV-B patrol radius (meters): ")
-    uav_b_alt = getFloat("Enter UAV-B altitude (meters): ")
-    uav_b_speed = getFloat("Enter UAV-B speed (m/s): ")
-    
-    print("\n--- User Mobility Setup 🚶 ---")
-    start_pos_2d = getCoordinate("User Start Position")
-    end_pos_2d = getCoordinate("User End Position")
-    user_velocity = getFloat("Enter user velocity in meters/second (decimal): ")
-    start_pos = np.append(start_pos_2d, 0)
-    end_pos = np.append(end_pos_2d, 0)
-    
-    print("\n--- Signal Propagation Setup ---")
-    p_tx_dbm = getFloat("Enter transmit power in dBm (decimal): ")
-    path_loss_n = getFloat("Enter path loss exponent (decimal): ")
-    
-    print("\n--- Handoff Logic Setup ---")
-    hysteresis_margin_db = getFloat("Enter hysteresis margin in dB (decimal): ")
-    
-    print("\n--- Simulation Time Step ---")
-    time_step = getFloat("Enter simulation time step in seconds (decimal): ")
-
-    params = {
-        'uav_a_anchor': uav_a_anchor, 'uav_a_radius': uav_a_radius,
-        'uav_a_altitude': uav_a_alt, 'uav_a_speed': uav_a_speed,
-        'uav_b_anchor': uav_b_anchor, 'uav_b_radius': uav_b_radius,
-        'uav_b_altitude': uav_b_alt, 'uav_b_speed': uav_b_speed,
-        'start_pos': start_pos, 'end_pos': end_pos, 'user_velocity': user_velocity,
-        'p_tx_dbm': p_tx_dbm, 'path_loss_n': path_loss_n,
-        'hysteresis_margin_db': hysteresis_margin_db,
-        'time_step': time_step, 'ref_distance': 1.0 
-    }
-    
-    print("\nAll parameters received. Starting simulation... \n")
-    return params
-
-# --- Part 3: Simulation Core ---
-
-def Simulate(params):
-    
-    start_pos = params['start_pos']
-    end_pos = params['end_pos']
-    user_velocity = params['user_velocity']
-    time_step = params['time_step']
-
-    path_vector = end_pos - start_pos
-    path_length = np.linalg.norm(path_vector)
-    
-    if path_length == 0 or user_velocity == 0:
-        print("Error: Path length or velocity is zero. Simulation cannot run.")
-        return None, None
+        # Hit boundary: Stay put this step, pick new random direction inwards
+        # (Simple bounce logic)
+        to_center = anchor - pos[:2]
+        to_center = to_center / np.linalg.norm(to_center) # Normalize
         
-    sim_time = path_length / user_velocity
-    time_points = np.arange(0, sim_time, time_step)
-    user_positions = [start_pos + t * user_velocity * path_vector / path_length for t in time_points]
+        # Mix vector towards center + random noise for realism
+        new_dir_2d = to_center + np.random.uniform(-0.5, 0.5, 2)
+        new_dir_2d = new_dir_2d / np.linalg.norm(new_dir_2d)
+        
+        return pos, np.array([new_dir_2d[0], new_dir_2d[1], 0])
+    
+    # Randomly change direction occasionally (Brownian-like motion)
+    if np.random.rand() < 0.05:
+        return next_pos, random_direction()
+        
+    return next_pos, direction
 
-    bs_a_pos = np.append(params['uav_a_anchor'], params['uav_a_altitude'])
-    bs_b_pos = np.append(params['uav_b_anchor'], params['uav_b_altitude'])
-    bs_a_dir = get_random_2d_direction()
-    bs_b_dir = get_random_2d_direction()
+# ==========================================
+# 3. SIMULATION ENGINE
+# ==========================================
 
+def run_simulation(cfg):
+    # Setup User Path
+    u_start, u_end = cfg['user']['start'], cfg['user']['end']
+    u_vel = cfg['user']['velocity']
+    dt = cfg['time_step']
+    
+    path_vec = u_end - u_start
+    total_dist = np.linalg.norm(path_vec)
+    total_time = total_dist / u_vel
+    steps = int(total_time / dt)
+    
+    # Generate all user positions at once (Vectorized)
+    t_vals = np.linspace(0, 1, steps)
+    user_path = u_start + np.outer(t_vals, path_vec)
+
+    # Initialize UAVs
+    ua_pos = np.append(cfg['uav_a']['anchor'], cfg['uav_a']['altitude'])
+    ub_pos = np.append(cfg['uav_b']['anchor'], cfg['uav_b']['altitude'])
+    ua_dir, ub_dir = random_direction(), random_direction()
+
+    # Data Containers
     logs = {
         'rss_a': [], 'rss_b': [], 'rss_diff': [], 
-        'serving_cell': [], 'handoffs': [],
-        'bs_a_path': [], 'bs_b_path': []
+        'serving': [], 'handoffs': [], 
+        'ua_path': [], 'ub_path': []
     }
-    
-    initial_dist_a = calculate_3d_distance(user_positions[0], bs_a_pos)
-    initial_dist_b = calculate_3d_distance(user_positions[0], bs_b_pos)
-    serving_cell = 'A' if initial_dist_a < initial_dist_b else 'B'
 
-    for user_pos in user_positions:
+    # Initial Connection
+    d_a = np.linalg.norm(user_path[0] - ua_pos)
+    d_b = np.linalg.norm(user_path[0] - ub_pos)
+    serving = 'A' if d_a < d_b else 'B'
+
+    # Time Stepping Loop
+    for u_pos in user_path:
+        # 1. Move UAVs
+        ua_pos, ua_dir = update_uav_position(
+            ua_pos, ua_dir, cfg['uav_a']['anchor'], 
+            cfg['uav_a']['radius'], cfg['uav_a']['speed'], dt
+        )
+        ub_pos, ub_dir = update_uav_position(
+            ub_pos, ub_dir, cfg['uav_b']['anchor'], 
+            cfg['uav_b']['radius'], cfg['uav_b']['speed'], dt
+        )
         
-        bs_a_pos, bs_a_dir = update_uav_position(bs_a_pos, bs_a_dir, params, 'uav_a')
-        bs_b_pos, bs_b_dir = update_uav_position(bs_b_pos, bs_b_dir, params, 'uav_b')
-        logs['bs_a_path'].append(bs_a_pos)
-        logs['bs_b_path'].append(bs_b_pos)
+        logs['ua_path'].append(ua_pos.copy())
+        logs['ub_path'].append(ub_pos.copy())
 
-        dist_a = calculate_3d_distance(user_pos, bs_a_pos)
-        dist_b = calculate_3d_distance(user_pos, bs_b_pos)
+        # 2. Calculate Signals
+        rss_a = get_rss(u_pos, ua_pos, cfg['radio']['tx_power'], cfg['radio']['path_loss_n'])
+        rss_b = get_rss(u_pos, ub_pos, cfg['radio']['tx_power'], cfg['radio']['path_loss_n'])
+        
+        # 3. Handoff Decision
+        hyst = cfg['radio']['hysteresis']
+        
+        if serving == 'A' and rss_b > rss_a + hyst:
+            serving = 'B'
+            logs['handoffs'].append((u_pos.copy(), rss_b))
+        elif serving == 'B' and rss_a > rss_b + hyst:
+            serving = 'A'
+            logs['handoffs'].append((u_pos.copy(), rss_a))
 
-        rss_a = RSS(dist_a, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
-        rss_b = RSS(dist_b, params['p_tx_dbm'], params['path_loss_n'], params['ref_distance'])
-
-        if serving_cell == 'A':
-            if rss_b > rss_a + params['hysteresis_margin_db']:
-                serving_cell = 'B'
-                logs['handoffs'].append({'pos': user_pos, 'rss': rss_b})
-                print(f"Handoff A -> B at user pos x={user_pos[0]:.2f}, y={user_pos[1]:.2f} m")
-                
-        elif serving_cell == 'B':
-            if rss_a > rss_b + params['hysteresis_margin_db']:
-                serving_cell = 'A'
-                logs['handoffs'].append({'pos': user_pos, 'rss': rss_a})
-                print(f"Handoff B -> A at user pos x={user_pos[0]:.2f}, y={user_pos[1]:.2f} m")
-
+        # 4. Logging
         logs['rss_a'].append(rss_a)
         logs['rss_b'].append(rss_b)
-        logs['rss_diff'].append(rss_b - rss_a) 
-        logs['serving_cell'].append(1 if serving_cell == 'A' else 2)
+        logs['rss_diff'].append(rss_b - rss_a)
+        logs['serving'].append(1 if serving == 'A' else 2)
 
-    return user_positions, logs
+    return user_path, logs
 
-# --- Part 4: Visualization ---
+# ==========================================
+# 4. VISUALIZATION FUNCTIONS
+# ==========================================
 
-def plotResults(user_positions, logs, params):
+def plot_time_series(user_path, logs, cfg):
+    """Plots RSS, RSS Difference, and Serving Cell over time/distance."""
+    x_axis = user_path[:, 0] # Use X coordinate for X-axis
+    hyst = cfg['radio']['hysteresis']
     
-    if user_positions is None: return
-        
-    user_x_positions = [p[0] for p in user_positions]
-    hysteresis = params['hysteresis_margin_db']
+    fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
     
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    plt.style.use('seaborn-v0_8-whitegrid')
+    # Plot 1: RSS Levels
+    ax = axes[0]
+    ax.plot(x_axis, logs['rss_a'], 'b-', label='RSS UAV-A', alpha=0.8)
+    ax.plot(x_axis, logs['rss_b'], 'r-', label='RSS UAV-B', alpha=0.8)
+    ax.set_ylabel('RSS (dBm)')
+    ax.set_title('Signal Strength & Handoff Analysis')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
 
-    ax1.plot(user_x_positions, logs['rss_a'], label='RSS from UAV-A', color='blue')
-    ax1.plot(user_x_positions, logs['rss_b'], label='RSS from UAV-B', color='red')
-    ax1.set_ylabel('RSS (dBm) 📶')
-    ax1.set_title('Handoff Simulation Analysis (UAV Base Stations)')
-    ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
-    for ho in logs['handoffs']:
-        ax1.axvline(x=ho['pos'][0], color='green', linestyle='--')
-        ax1.plot(ho['pos'][0], ho['rss'], 'go', markersize=10, 
-                 label=f'Handoff Event at x={ho["pos"][0]:.0f}m')
-    ax1.legend()
+    # Plot 2: RSS Difference
+    ax = axes[1]
+    ax.plot(x_axis, logs['rss_diff'], 'k-', label='RSS_B - RSS_A', lw=1)
+    ax.axhline(hyst, color='red', ls=':', label=f'Hyst (+{hyst}dB)')
+    ax.axhline(-hyst, color='blue', ls=':', label=f'Hyst (-{hyst}dB)')
+    ax.fill_between(x_axis, -hyst, hyst, color='gray', alpha=0.1)
+    ax.set_ylabel('Delta RSS (dB)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
 
-    ax2.plot(user_x_positions, logs['rss_diff'], label='RSS_B - RSS_A', color='purple')
-    ax2.axhline(y=hysteresis, color='red', linestyle=':', 
-                label=f'Handoff Threshold (A->B) = {hysteresis} dB')
-    ax2.axhline(y=-hysteresis, color='blue', linestyle=':', 
-                label=f'Handoff Threshold (B->A) = {-hysteresis} dB')
-    ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
-    ax2.set_ylabel('RSS Difference (dB)')
-    ax2.grid(True, which='both', linestyle='--', linewidth=0.5)
-    for ho in logs['handoffs']:
-        ax2.axvline(x=ho['pos'][0], color='green', linestyle='--')
-    ax2.legend()
+    # Plot 3: Serving Cell
+    ax = axes[2]
+    ax.step(x_axis, logs['serving'], where='post', color='black', lw=2)
+    ax.set_yticks([1, 2])
+    ax.set_yticklabels(['UAV-A', 'UAV-B'])
+    ax.set_ylabel('Active Connection')
+    ax.set_xlabel('User X Position (m)')
+    ax.grid(True, alpha=0.3)
+
+    # Annotate Handoffs on all plots
+    for i, ax in enumerate(axes):
+        for pos, _ in logs['handoffs']:
+            ax.axvline(pos[0], color='green', ls='--', alpha=0.6)
+            if i == 0: # Only label on top plot to avoid clutter
+                ax.text(pos[0], ax.get_ylim()[0], 'HO', color='green', 
+                        ha='center', va='bottom', fontweight='bold')
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_spatial_map(user_path, logs, cfg):
+    """Plots the 2D Top-Down view of the simulation."""
+    plt.figure(figsize=(10, 8))
+    ax = plt.gca()
+
+    # 1. Plot Patrol Zones
+    c_a = Circle(cfg['uav_a']['anchor'], cfg['uav_a']['radius'], 
+                 color='blue', alpha=0.1, label='Zone A')
+    c_b = Circle(cfg['uav_b']['anchor'], cfg['uav_b']['radius'], 
+                 color='red', alpha=0.1, label='Zone B')
+    ax.add_patch(c_a)
+    ax.add_patch(c_b)
+
+    # 2. Plot UAV Paths
+    ua_path = np.array(logs['ua_path'])
+    ub_path = np.array(logs['ub_path'])
+    plt.plot(ua_path[:, 0], ua_path[:, 1], 'b:', alpha=0.5, lw=1, label='UAV-A Path')
+    plt.plot(ub_path[:, 0], ub_path[:, 1], 'r:', alpha=0.5, lw=1, label='UAV-B Path')
+
+    # 3. Plot User Path (Color coded by serving cell)
+    # We scatter plot the points to easily color-code segments
+    serving_arr = np.array(logs['serving'])
     
-    ax3.plot(user_x_positions, logs['serving_cell'], 'k.-', drawstyle='steps-post', label='Serving Cell')
-    ax3.set_xlabel('User Position along X-axis (meters)')
-    ax3.set_ylabel('Serving Cell')
-    ax3.set_yticks([1, 2])
-    ax3.set_yticklabels(['UAV-A', 'UAV-B'])
-    ax3.set_ylim(0.5, 2.5)
-    ax3.grid(True, which='both', linestyle='--', linewidth=0.5)
-    for ho in logs['handoffs']:
-        ax3.axvline(x=ho['pos'][0], color='green', linestyle='--', label='_nolegend_')
-        ax3.plot(ho['pos'][0], 1.5, 'go', markersize=10, 
-                 label=f'Handoff at x={ho["pos"][0]:.0f}m')
-    ax3.legend(loc='best')
+    # Points served by A
+    mask_a = serving_arr == 1
+    plt.scatter(user_path[mask_a, 0], user_path[mask_a, 1], 
+                c='blue', s=10, label='User (on A)')
+    
+    # Points served by B
+    mask_b = serving_arr == 2
+    plt.scatter(user_path[mask_b, 0], user_path[mask_b, 1], 
+                c='red', s=10, label='User (on B)')
+
+    # 4. Plot Handoff Points
+    if logs['handoffs']:
+        ho_coords = np.array([x[0] for x in logs['handoffs']])
+        plt.scatter(ho_coords[:, 0], ho_coords[:, 1], 
+                    c='lime', edgecolors='black', s=100, zorder=10, label='Handoff Event')
+
+    # Formatting
+    plt.title('Spatial Map: UAV Handoff Simulation')
+    plt.xlabel('X Coordinate (m)')
+    plt.ylabel('Y Coordinate (m)')
+    plt.axis('equal') # CRITICAL for map views
+    plt.grid(True, ls='--', alpha=0.5)
+    plt.legend(loc='best')
     
     plt.tight_layout()
     plt.show()
 
-
-def plotSpatialMap(params, user_positions, logs):
-    if user_positions is None: return
-        
-    positions = np.array(user_positions)
-    serving_cell = np.array(logs['serving_cell'])
-    cell_a_user_path = positions[serving_cell == 1][:, 0:2]
-    cell_b_user_path = positions[serving_cell == 2][:, 0:2]
-    
-    uav_a_path_np = np.array(logs['bs_a_path'])[:, 0:2]
-    uav_b_path_np = np.array(logs['bs_b_path'])[:, 0:2]
-
-    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-
-    if len(cell_a_user_path) > 0:
-        ax.plot(cell_a_user_path[:, 0], cell_a_user_path[:, 1], 'b.', 
-                markersize=2, label='User (Served by A)')
-    if len(cell_b_user_path) > 0:
-        ax.plot(cell_b_user_path[:, 0], cell_b_user_path[:, 1], 'r.', 
-                markersize=2, label='User (Served by B)')
-
-    # UAV-A
-    anchor_a = params['uav_a_anchor']
-    radius_a = params['uav_a_radius']
-    ax.plot(anchor_a[0], anchor_a[1], 'bx', markersize=10, label='UAV-A Anchor')
-    patrol_zone_a = Circle(anchor_a, radius_a, color='blue', fill=False, linestyle='--')
-    ax.add_patch(patrol_zone_a)
-    
-    # UAV-B
-    anchor_b = params['uav_b_anchor']
-    radius_b = params['uav_b_radius']
-    ax.plot(anchor_b[0], anchor_b[1], 'rx', markersize=10, label='UAV-B Anchor')
-    patrol_zone_b = Circle(anchor_b, radius_b, color='red', fill=False, linestyle='--')
-    ax.add_patch(patrol_zone_b)
-
-    ax.plot(uav_a_path_np[:, 0], uav_a_path_np[:, 1], 'b:', 
-            linewidth=0.5, label='UAV-A Path')
-    ax.plot(uav_b_path_np[:, 0], uav_b_path_np[:, 1], 'r:', 
-            linewidth=0.5, label='UAV-B Path')
-            
-    for ho in logs['handoffs']:
-        ho_pos = ho['pos'] # This is the [x, y, z] of the *user*
-        ax.plot(ho_pos[0], ho_pos[1], 'go', markersize=12, 
-                label=f'Handoff at ({ho_pos[0]:.0f}, {ho_pos[1]:.0f})m', 
-                markeredgecolor='black')
-
-    ax.set_xlabel('X-coordinate (meters)')
-    ax.set_ylabel('Y-coordinate (meters)')
-    ax.set_title('Spatial Map of UAV Handoff 🛰️🚶')
-    ax.legend(loc='best')
-    ax.grid(True, linestyle='--', linewidth=0.5)
-    ax.set_aspect('equal', adjustable='box') # Makes X and Y scales equal
-    
-    plt.show()
-
-# --- Part 5: Main Execution ---
-
+# ==========================================
+# 5. MAIN EXECUTION
+# ==========================================
 if __name__ == "__main__":
+    print("Initializing UAV Handoff Simulation...")
     
-    parameters = getParameters()
+    # Run
+    path_data, log_data = run_simulation(CONFIG)
     
-    positions, results_logs = Simulate(parameters)
+    # Visualize
+    print(f"Simulation Complete. Total steps: {len(path_data)}")
+    print(f"Handoffs occurred: {len(log_data['handoffs'])}")
     
-    if positions:
-        print("\nDisplaying Figure 1: Time-Series Analysis...")
-        plotResults(positions, results_logs, parameters)
-        
-        print("Displaying Figure 2: Spatial Map Analysis...")
-        plotSpatialMap(parameters, positions, results_logs)
-    else:
-        print("Simulation did not run. No results to plot.")
+    plot_time_series(path_data, log_data, CONFIG)
+    plot_spatial_map(path_data, log_data, CONFIG)
