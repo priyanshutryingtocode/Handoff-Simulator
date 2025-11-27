@@ -1,13 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# --- Part 1: Configuration (Parameter Block) ---
+# Part 1
 
 def get_simulation_config():
-    """
-    EDIT THIS BLOCK to change simulation settings.
-    No more manual input required.
-    """
+   
     return {
         # Base Station Locations (meters)
         'bs_a_pos': np.array([0.0, 0.0]),
@@ -20,7 +17,7 @@ def get_simulation_config():
 
         # Signal Parameters
         'p_tx_dbm': 40.0,      # Transmit power
-        'path_loss_n': 2.8,    # Path loss exponent (2.0=free space, 4.0=urban)
+        'path_loss_n': 2.8,    # Path loss exponent
         'ref_distance': 1.0,
         
         # New Parameters for Image Formula
@@ -31,21 +28,18 @@ def get_simulation_config():
         'hysteresis_margin_db': 5.0, # dB margin required to switch
 
         # Simulation Fidelity
-        'time_step': 0.5       # seconds
+        'time_step': 0.5       
     }
 
-# --- Part 2: Simulation Logic ---
+# Part 2
 
 def calculate_rss(distance, p_tx, n, d0, frequency, shadow_std):
-    """
-    Calculates RSS using the Log-Normal Shadowing Model.
-    Formula: PL = PL_ref + 10*n*log10(d/d0) + SF*epsilon
-    """
+    
     if distance < d0:
         distance = d0
         
     # 1. Calculate Wavelength (lambda = c / f)
-    c = 3e8 # Speed of light in m/s
+    c = 3e8 
     wavelength = c / frequency
     
     # 2. Calculate Reference Path Loss (PL_ref) at d0
@@ -56,7 +50,6 @@ def calculate_rss(distance, p_tx, n, d0, frequency, shadow_std):
     dist_loss = 10 * n * np.log10(distance / d0)
     
     # 4. Calculate Shadowing Component (SF * epsilon)
-    # epsilon is random normal (Gaussian), scaled by shadow factor (std dev)
     shadowing = np.random.normal(0, shadow_std)
     
     # Total Path Loss
@@ -86,7 +79,6 @@ def run_simulation(params):
     # Generate all positions along the line
     user_positions = [start_pos + t * user_velocity * path_vector / path_length for t in time_points]
 
-    # Initialize logs
     logs = {
         'rss_a': [], 
         'rss_b': [], 
@@ -96,11 +88,9 @@ def run_simulation(params):
     }
     
     # Determine initial connection
-    # Note: We use 0 shadowing for initialization to avoid random start glitches
     initial_dist_a = np.linalg.norm(user_positions[0] - bs_a_pos)
     initial_dist_b = np.linalg.norm(user_positions[0] - bs_b_pos)
     
-    # Helper to get clean RSS for init
     rss_a_init = calculate_rss(initial_dist_a, params['p_tx_dbm'], params['path_loss_n'], 
                                params['ref_distance'], params['frequency_hz'], 0)
     rss_b_init = calculate_rss(initial_dist_b, params['p_tx_dbm'], params['path_loss_n'], 
@@ -138,10 +128,10 @@ def run_simulation(params):
 
     return user_positions, logs
 
-# --- Part 3: Enhanced Visualization ---
+# Part 3
 
 def plot_dashboard(user_positions, logs, params):
-    """Generates a 3-panel dashboard (RSS, Decision, Serving Cell)."""
+    
     if user_positions is None or logs is None:
         return
         
@@ -151,7 +141,7 @@ def plot_dashboard(user_positions, logs, params):
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
 
-    # Plot 1: Raw RSS Levels (Now Noisier due to Shadowing)
+    # Plot 1
     ax1.plot(user_x_positions, logs['rss_a'], label='RSS Cell A', color='blue', alpha=0.7, linewidth=1)
     ax1.plot(user_x_positions, logs['rss_b'], label='RSS Cell B', color='red', alpha=0.7, linewidth=1)
     ax1.set_ylabel('RSS (dBm)')
@@ -159,9 +149,8 @@ def plot_dashboard(user_positions, logs, params):
     ax1.legend()
     ax1.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # Plot 2: Handoff Decision Metric (RSS Difference)
+    # Plot 2
     ax2.plot(user_x_positions, logs['rss_diff'], color='purple', label='RSS_B - RSS_A', alpha=0.8)
-    # Add Threshold Lines
     ax2.axhline(y=hyst, color='red', linestyle=':', label=f'Handoff Thresh (A->B): +{hyst}dB')
     ax2.axhline(y=-hyst, color='blue', linestyle=':', label=f'Handoff Thresh (B->A): -{hyst}dB')
     ax2.axhline(y=0, color='black', linewidth=0.5)
@@ -170,11 +159,11 @@ def plot_dashboard(user_positions, logs, params):
     ax2.legend()
     ax2.grid(True, which='both', linestyle='--', alpha=0.5)
     
-    # Mark handoffs on the difference plot
+    # Mark handoffs
     for ho in logs['handoffs']:
         ax2.axvline(x=ho['pos'][0], color='green', linestyle='--')
 
-    # Plot 3: Serving Cell
+    # Plot 3
     ax3.plot(user_x_positions, logs['serving_cell'], 'k.-', drawstyle='steps-post', label='Serving Cell')
     ax3.set_xlabel('User Position along X-axis (meters)')
     ax3.set_ylabel('Cell ID')
@@ -184,7 +173,6 @@ def plot_dashboard(user_positions, logs, params):
     ax3.set_title('3. Active Connection Status')
     
     # Mark handoffs on serving cell plot
-    # FIXED: Use enumerate to avoid ambiguous truth value error when comparing numpy arrays
     for i, ho in enumerate(logs['handoffs']):
         ax3.axvline(x=ho['pos'][0], color='green', linestyle='--', label='Handoff Event' if i == 0 else "")
     
@@ -193,13 +181,12 @@ def plot_dashboard(user_positions, logs, params):
     plt.show()
 
 def plot_spatial_map(user_positions, logs, params):
-    """Generates a top-down 2D map of the scenario."""
+
     if user_positions is None: return
 
     bs_a = params['bs_a_pos']
     bs_b = params['bs_b_pos']
     
-    # Convert list to numpy array for easier indexing
     pos_arr = np.array(user_positions)
     serving_arr = np.array(logs['serving_cell'])
 
@@ -210,9 +197,9 @@ def plot_spatial_map(user_positions, logs, params):
     plt.plot(bs_b[0], bs_b[1], marker='^', color='red', markersize=15, label='Base Station B', markeredgecolor='black')
 
     # Plot User Path (Color coded by serving cell)
-    # Filter points served by A
+
     path_a = pos_arr[serving_arr == 1]
-    # Filter points served by B
+
     path_b = pos_arr[serving_arr == 2]
 
     if len(path_a) > 0:
@@ -224,7 +211,6 @@ def plot_spatial_map(user_positions, logs, params):
     for ho in logs['handoffs']:
         plt.scatter(ho['pos'][0], ho['pos'][1], color='lime', s=150, edgecolors='black', label='Handoff Location', zorder=10)
 
-    # Avoid duplicate labels in legend
     handles, labels = plt.gca().get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     plt.legend(by_label.values(), by_label.keys())
@@ -232,21 +218,21 @@ def plot_spatial_map(user_positions, logs, params):
     plt.title('Spatial Map: User Path & Network Coverage')
     plt.xlabel('X Coordinate (m)')
     plt.ylabel('Y Coordinate (m)')
-    plt.axis('equal') # Ensures map isn't distorted
+    plt.axis('equal')
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.show()
 
-# --- Main Execution ---
+# Main
 
 if __name__ == "__main__":
     
-    # 1. Get parameters (Static Configuration)
+    # 1. Get parameters
     simulation_params = get_simulation_config()
     
     # 2. Run simulation
     positions, results_logs = run_simulation(simulation_params)
     
-    # 3. Enhanced Plotting
+    # 3. Plotting
     print("\nGenerating Figure 1: Simulation Dashboard...")
     plot_dashboard(positions, results_logs, simulation_params)
     

@@ -2,57 +2,51 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
-# ==========================================
-# 1. CONFIGURATION BLOCK
-# ==========================================
+# Part 1
+
 CONFIG = {
     # UAV-A (Base Station A)
     'uav_a': {
         'anchor': np.array([0, 0]),
-        'radius': 200,      # meters
-        'altitude': 120,    # meters
-        'speed': 15         # m/s
+        'radius': 200,      
+        'altitude': 120,    
+        'speed': 15         
     },
     
     # UAV-B (Base Station B)
     'uav_b': {
         'anchor': np.array([500, 0]),
-        'radius': 200,      # meters
-        'altitude': 120,    # meters
-        'speed': 15         # m/s
+        'radius': 200,      
+        'altitude': 120,    
+        'speed': 15         
     },
 
     # User Mobility
     'user': {
         'start': np.array([0, -300, 0]),
         'end':   np.array([500, 300, 0]),
-        'velocity': 5       # m/s
+        'velocity': 5       
     },
 
     # Radio & Handoff Parameters
     'radio': {
-        'tx_power': 30,         # dBm
-        'path_loss_n': 2.5,     # Path loss exponent
-        'hysteresis': 5.0,      # dB Margin
-        'ref_distance': 1.0,    # d0
-        'frequency_hz': 2.4e9,  # Carrier Frequency (2.4 GHz)
-        'shadowing_std_db': 0.1 # Shadow Factor (SF) - Standard Deviation in dB
+        'tx_power': 30,         
+        'path_loss_n': 2.5,     
+        'hysteresis': 5.0,      
+        'ref_distance': 1.0,    
+        'frequency_hz': 2.4e9,  
+        'shadowing_std_db': 0.1 
     },
 
     # Simulation Settings
-    'time_step': 0.5        # seconds
+    'time_step': 0.5        
 }
 
-# ==========================================
-# 2. PHYSICS & RADIO FUNCTIONS
-# ==========================================
+
+# Part 2
 
 def get_rss(pos1, pos2, tx_power, n, d0, frequency, shadow_std):
-    """
-    Calculates RSS using the Log-Normal Shadowing Model for 3D distances.
-    Formula: PL = PL_ref + 10*n*log10(d/d0) + SF*epsilon
-    """
-    # 3D Euclidean Distance
+  
     dist = np.linalg.norm(pos1 - pos2)
     dist = max(dist, d0) # Avoid log(0)
 
@@ -78,16 +72,12 @@ def get_rss(pos1, pos2, tx_power, n, d0, frequency, shadow_std):
     return tx_power - path_loss
 
 def random_direction():
-    """Returns a random 2D unit vector (x, y, 0)."""
+
     theta = np.random.uniform(0, 2 * np.pi)
     return np.array([np.cos(theta), np.sin(theta), 0])
 
 def update_uav_position(pos, direction, anchor, radius, speed, dt):
-    """
-    Updates UAV position. Bounces off the patrol radius boundary.
-    Returns: (new_position, new_direction)
-    """
-    # Propose new position
+    
     next_pos = pos + direction * speed * dt
     
     # Check 2D distance from anchor (ignore altitude for boundary check)
@@ -104,15 +94,13 @@ def update_uav_position(pos, direction, anchor, radius, speed, dt):
         
         return pos, np.array([new_dir_2d[0], new_dir_2d[1], 0])
     
-    # Randomly change direction occasionally
     if np.random.rand() < 0.05:
         return next_pos, random_direction()
         
     return next_pos, direction
 
-# ==========================================
-# 3. SIMULATION ENGINE
-# ==========================================
+# Part 3
+
 
 def run_simulation(cfg):
     # Setup User Path
@@ -134,17 +122,14 @@ def run_simulation(cfg):
     ub_pos = np.append(cfg['uav_b']['anchor'], cfg['uav_b']['altitude'])
     ua_dir, ub_dir = random_direction(), random_direction()
 
-    # Data Containers
     logs = {
         'rss_a': [], 'rss_b': [], 'rss_diff': [], 
         'serving': [], 'handoffs': [], 
         'ua_path': [], 'ub_path': []
     }
 
-    # Radio params extraction for cleaner code
     r_conf = cfg['radio']
     
-    # Initial Connection (Use 0 shadowing for stability at t=0)
     rss_a_init = get_rss(user_path[0], ua_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
                          r_conf['ref_distance'], r_conf['frequency_hz'], 0)
     rss_b_init = get_rss(user_path[0], ub_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
@@ -152,7 +137,6 @@ def run_simulation(cfg):
     
     serving = 'A' if rss_a_init > rss_b_init else 'B'
 
-    # Time Stepping Loop
     for u_pos in user_path:
         # 1. Move UAVs
         ua_pos, ua_dir = update_uav_position(
@@ -191,12 +175,10 @@ def run_simulation(cfg):
 
     return user_path, logs
 
-# ==========================================
-# 4. VISUALIZATION FUNCTIONS
-# ==========================================
+# Part 4 
 
 def plot_time_series(user_path, logs, cfg):
-    """Plots RSS, RSS Difference, and Serving Cell over time/distance."""
+    
     x_axis = user_path[:, 0] # Use X coordinate for X-axis
     hyst = cfg['radio']['hysteresis']
     
@@ -230,7 +212,6 @@ def plot_time_series(user_path, logs, cfg):
     ax.set_xlabel('User X Position (m)')
     ax.grid(True, alpha=0.3)
 
-    # Annotate Handoffs (First one only in legend to avoid clutter)
     for i, ax in enumerate(axes):
         first_ho = True
         for pos, _ in logs['handoffs']:
@@ -245,7 +226,7 @@ def plot_time_series(user_path, logs, cfg):
     plt.show()
 
 def plot_spatial_map(user_path, logs, cfg):
-    """Plots the 2D Top-Down view of the simulation."""
+
     plt.figure(figsize=(10, 8))
     ax = plt.gca()
 
@@ -282,14 +263,12 @@ def plot_spatial_map(user_path, logs, cfg):
         plt.scatter(ho_coords[:, 0], ho_coords[:, 1], 
                     c='lime', edgecolors='black', s=100, zorder=10, label='Handoff Event')
 
-    # Formatting
     plt.title('Spatial Map: UAV Handoff with Shadowing')
     plt.xlabel('X Coordinate (m)')
     plt.ylabel('Y Coordinate (m)')
     plt.axis('equal')
     plt.grid(True, ls='--', alpha=0.5)
     
-    # Fix duplicate labels
     handles, labels = plt.gca().get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     plt.legend(by_label.values(), by_label.keys(), loc='best')
@@ -297,16 +276,13 @@ def plot_spatial_map(user_path, logs, cfg):
     plt.tight_layout()
     plt.show()
 
-# ==========================================
-# 5. MAIN EXECUTION
-# ==========================================
+# Main
+
 if __name__ == "__main__":
     print("Initializing UAV Handoff Simulation (with Shadowing)...")
     
-    # Run
     path_data, log_data = run_simulation(CONFIG)
     
-    # Visualize
     print(f"Simulation Complete. Total steps: {len(path_data)}")
     print(f"Handoffs occurred: {len(log_data['handoffs'])}")
     
