@@ -5,7 +5,7 @@ from matplotlib.patches import Circle
 # Part 1
 
 CONFIG = {
-    # UAV-A (Base Station A)
+
     'uav_a': {
         'anchor': np.array([0, 0]),
         'radius': 200,      
@@ -13,22 +13,19 @@ CONFIG = {
         'speed': 15         
     },
     
-    # UAV-B (Base Station B)
     'uav_b': {
         'anchor': np.array([500, 0]),
         'radius': 200,      
         'altitude': 120,    
         'speed': 15         
     },
-
-    # User Mobility
+    
     'user': {
         'start': np.array([0, -300, 0]),
         'end':   np.array([500, 300, 0]),
         'velocity': 5       
     },
 
-    # Radio & Handoff Parameters
     'radio': {
         'tx_power': 30,         
         'path_loss_n': 2.5,     
@@ -38,7 +35,6 @@ CONFIG = {
         'shadowing_std_db': 0.1 
     },
 
-    # Simulation Settings
     'time_step': 0.5        
 }
 
@@ -48,25 +44,17 @@ CONFIG = {
 def get_rss(pos1, pos2, tx_power, n, d0, frequency, shadow_std):
   
     dist = np.linalg.norm(pos1 - pos2)
-    dist = max(dist, d0) # Avoid log(0)
+    dist = max(dist, d0)
 
-    # 1. Calculate Wavelength (lambda = c / f)
     c = 3e8 
     wavelength = c / frequency
 
-    # 2. Calculate Reference Path Loss (PL_ref) at d0
-    # Formula: 20 * log10(4 * pi * d0 / lambda)
     pl_ref = 20 * np.log10((4 * np.pi * d0) / wavelength)
 
-    # 3. Calculate Distance Component
-    # Formula: 10 * n * log10(d / d0)
     dist_loss = 10 * n * np.log10(dist / d0)
 
-    # 4. Calculate Shadowing Component
-    # Formula: SF * epsilon (random normal distribution)
     shadowing = np.random.normal(0, shadow_std)
 
-    # Total Path Loss
     path_loss = pl_ref + dist_loss + shadowing
     
     return tx_power - path_loss
@@ -80,15 +68,13 @@ def update_uav_position(pos, direction, anchor, radius, speed, dt):
     
     next_pos = pos + direction * speed * dt
     
-    # Check 2D distance from anchor (ignore altitude for boundary check)
     dist_from_anchor = np.linalg.norm(next_pos[:2] - anchor)
     
     if dist_from_anchor > radius:
-        # Hit boundary: Stay put this step, pick new random direction inwards
+
         to_center = anchor - pos[:2]
-        to_center = to_center / np.linalg.norm(to_center) # Normalize
+        to_center = to_center / np.linalg.norm(to_center) 
         
-        # Mix vector towards center + random noise for realism
         new_dir_2d = to_center + np.random.uniform(-0.5, 0.5, 2)
         new_dir_2d = new_dir_2d / np.linalg.norm(new_dir_2d)
         
@@ -101,9 +87,8 @@ def update_uav_position(pos, direction, anchor, radius, speed, dt):
 
 # Part 3
 
-
 def run_simulation(cfg):
-    # Setup User Path
+
     u_start, u_end = cfg['user']['start'], cfg['user']['end']
     u_vel = cfg['user']['velocity']
     dt = cfg['time_step']
@@ -113,11 +98,9 @@ def run_simulation(cfg):
     total_time = total_dist / u_vel
     steps = int(total_time / dt)
     
-    # Generate all user positions at once (Vectorized)
     t_vals = np.linspace(0, 1, steps)
     user_path = u_start + np.outer(t_vals, path_vec)
 
-    # Initialize UAVs
     ua_pos = np.append(cfg['uav_a']['anchor'], cfg['uav_a']['altitude'])
     ub_pos = np.append(cfg['uav_b']['anchor'], cfg['uav_b']['altitude'])
     ua_dir, ub_dir = random_direction(), random_direction()
@@ -138,7 +121,7 @@ def run_simulation(cfg):
     serving = 'A' if rss_a_init > rss_b_init else 'B'
 
     for u_pos in user_path:
-        # 1. Move UAVs
+
         ua_pos, ua_dir = update_uav_position(
             ua_pos, ua_dir, cfg['uav_a']['anchor'], 
             cfg['uav_a']['radius'], cfg['uav_a']['speed'], dt
@@ -151,13 +134,11 @@ def run_simulation(cfg):
         logs['ua_path'].append(ua_pos.copy())
         logs['ub_path'].append(ub_pos.copy())
 
-        # 2. Calculate Signals (Now with Shadowing)
         rss_a = get_rss(u_pos, ua_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
                         r_conf['ref_distance'], r_conf['frequency_hz'], r_conf['shadowing_std_db'])
         rss_b = get_rss(u_pos, ub_pos, r_conf['tx_power'], r_conf['path_loss_n'], 
                         r_conf['ref_distance'], r_conf['frequency_hz'], r_conf['shadowing_std_db'])
         
-        # 3. Handoff Decision
         hyst = r_conf['hysteresis']
         
         if serving == 'A' and rss_b > rss_a + hyst:
@@ -167,7 +148,6 @@ def run_simulation(cfg):
             serving = 'A'
             logs['handoffs'].append((u_pos.copy(), rss_a))
 
-        # 4. Logging
         logs['rss_a'].append(rss_a)
         logs['rss_b'].append(rss_b)
         logs['rss_diff'].append(rss_b - rss_a)
@@ -179,7 +159,7 @@ def run_simulation(cfg):
 
 def plot_time_series(user_path, logs, cfg):
     
-    x_axis = user_path[:, 0] # Use X coordinate for X-axis
+    x_axis = user_path[:, 0] 
     hyst = cfg['radio']['hysteresis']
     
     fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
@@ -230,7 +210,6 @@ def plot_spatial_map(user_path, logs, cfg):
     plt.figure(figsize=(10, 8))
     ax = plt.gca()
 
-    # 1. Plot Patrol Zones
     c_a = Circle(cfg['uav_a']['anchor'], cfg['uav_a']['radius'], 
                  color='blue', alpha=0.1, label='Zone A')
     c_b = Circle(cfg['uav_b']['anchor'], cfg['uav_b']['radius'], 
@@ -238,26 +217,21 @@ def plot_spatial_map(user_path, logs, cfg):
     ax.add_patch(c_a)
     ax.add_patch(c_b)
 
-    # 2. Plot UAV Paths
     ua_path = np.array(logs['ua_path'])
     ub_path = np.array(logs['ub_path'])
     plt.plot(ua_path[:, 0], ua_path[:, 1], 'b:', alpha=0.5, lw=1, label='UAV-A Path')
     plt.plot(ub_path[:, 0], ub_path[:, 1], 'r:', alpha=0.5, lw=1, label='UAV-B Path')
 
-    # 3. Plot User Path (Color coded by serving cell)
     serving_arr = np.array(logs['serving'])
     
-    # Points served by A
     mask_a = serving_arr == 1
     plt.scatter(user_path[mask_a, 0], user_path[mask_a, 1], 
                 c='blue', s=10, label='User (on A)')
     
-    # Points served by B
     mask_b = serving_arr == 2
     plt.scatter(user_path[mask_b, 0], user_path[mask_b, 1], 
                 c='red', s=10, label='User (on B)')
 
-    # 4. Plot Handoff Points
     if logs['handoffs']:
         ho_coords = np.array([x[0] for x in logs['handoffs']])
         plt.scatter(ho_coords[:, 0], ho_coords[:, 1], 
